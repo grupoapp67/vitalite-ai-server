@@ -19,3 +19,5 @@ Salida JSON:
 
 No inventes datos fuera de userData; si faltan, asume valores seguros y di cuáles.
 `;
+import compression from "compression";
+app.use(compression());
