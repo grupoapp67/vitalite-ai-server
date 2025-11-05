@@ -1,42 +1,20 @@
-// server.js (CommonJS, Node 18+)
 const express = require("express");
 const cors = require("cors");
 
-// --- Config ---
+const app = express();
 const PORT = process.env.PORT || 3000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini"; // cambia si quieres
+const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
-const app = express();
-
-// CORS (puedes restringir a tu CodePen si querés)
 app.use(cors());
 app.use(express.json());
 
-// Healthcheck
+// healthcheck
 app.get("/", (req, res) => {
   res.json({ ok: true, message: "Vitalite AI server is running ✅" });
 });
 
-// Util: generar rutina según goal + trainingDays
-function buildRoutine(userData = {}) {
-  const goal = userData.goal || "mantener";
-  const trainingDays = Number(userData.trainingDays || 3);
-  const days = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
-  const baseByGoal = {
-    bajar: ["Cardio 30 min", "Abdominales 3x20", "Sentadillas 3x15"],
-    masa: ["Flexiones 4x12", "Dominadas 3x10", "Peso muerto 3x12"],
-    mantener: ["Caminata 20 min", "Plancha 3x30s", "Estiramiento 15 min"],
-    resistencia: ["Correr 40 min", "Burpees 3x15", "Planchas 3x1 min"],
-  };
-  const base = baseByGoal[goal] || ["Caminata 20 min", "Estiramientos suaves"];
-  return days.map((d, i) => ({
-    day: d,
-    routine: i < trainingDays ? base.join(", ") : "Descanso 💤",
-  }));
-}
-
-// Util: armar mensaje de sistema con la encuesta
+// ⬇️ 1) función de contexto, ahora con altura y peso
 function makeSystemContext(userData = {}) {
   const name = userData.name || "usuario";
   const goal = userData.goal || "mantener";
@@ -58,28 +36,48 @@ Datos del usuario:
 - Ánimo: ${mood}
 - Estrés: ${stress}
 - Sueño: ${sleep}
-Usa estos datos en tus respuestas. Responde en español.
+Usa estos datos en tus respuestas. Responde en español y de forma cercana.
   `.trim();
 }
 
-`.trim();
+// utilidad para crear una rutina si la pide
+function buildRoutine(userData = {}) {
+  const goal = userData.goal || "mantener";
+  const trainingDays = Number(userData.trainingDays || 3);
+  const days = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
+  const baseByGoal = {
+    bajar: ["Cardio 30 min", "Abdominales 3x20", "Sentadillas 3x15"],
+    masa: ["Flexiones 4x12", "Dominadas 3x10", "Peso muerto 3x12"],
+    mantener: ["Caminata 20 min", "Plancha 3x30s", "Estiramiento 15 min"],
+    resistencia: ["Correr 40 min", "Burpees 3x15", "Planchas 3x1 min"],
+  };
+  const base = baseByGoal[goal] || ["Caminata 20 min", "Estiramientos suaves"];
+  return days.map((d, i) => ({
+    day: d,
+    routine: i < trainingDays ? base.join(", ") : "Descanso 💤",
+  }));
 }
 
-// POST /api/chat: recibe { message, userData, history }
+// ⬇️ 2) endpoint principal
 app.post("/api/chat", async (req, res) => {
   const { message, userData = {}, history = [] } = req.body || {};
+
+  // LOG para ver qué está llegando
+  console.log("---- /api/chat ----");
+  console.log("message:", message);
+  console.log("userData:", userData);
+  console.log("history length:", Array.isArray(history) ? history.length : 0);
 
   if (!message) {
     return res.status(400).json({ error: "message is required" });
   }
 
-  // armar conversación para el modelo
-  const messages = [];
+  const askedRoutine = /(?:\brutina\b|\bentrenar\b|\bworkout\b|\bgenerar rutina\b)/i.test(message);
 
-  // 1) sistema con el contexto de la encuesta
+  // armamos los mensajes para el modelo
+  const messages = [];
   messages.push({ role: "system", content: makeSystemContext(userData) });
 
-  // 2) historial (solo user/assistant)
   if (Array.isArray(history)) {
     history.slice(-20).forEach((m) => {
       if (m && (m.role === "user" || m.role === "assistant") && m.content) {
@@ -88,25 +86,20 @@ app.post("/api/chat", async (req, res) => {
     });
   }
 
-  // 3) último mensaje del usuario
   messages.push({ role: "user", content: message });
 
-  // ¿Pidió rutina?
-  const askedRoutine = /(?:\brutina\b|\bentrenar\b|\bworkout\b|\bgenerar rutina\b)/i.test(message);
-
   try {
-    // Si no hay API key, devolvemos un fallback útil (pero sin llamar a OpenAI)
+    // si no hay key, devolvemos igual usando los datos
     if (!OPENAI_API_KEY) {
-      const reply =
-        `⚠️ Falta OPENAI_API_KEY en el servidor.\n` +
-        `Igual recibí tu mensaje y tus datos: objetivo "${userData.goal || "mantener"}", ` +
-        `${userData.trainingDays || 3} días/semana.`;
-      const routine = askedRoutine ? buildRoutine(userData) : null;
-      return res.json({ reply, routine });
+      const baseReply = `Recibí tus datos 👌 Objetivo: ${userData.goal || "no indicado"}, días: ${userData.trainingDays || "no indicado"}, altura: ${userData.height || "no indicada"} cm, peso: ${userData.weight || "no indicado"} kg.`;
+      return res.json({
+        reply: baseReply,
+        ...(askedRoutine ? { routine: buildRoutine(userData) } : {})
+      });
     }
 
-    // Llamado a OpenAI REST (Node 18 ya trae fetch global)
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    // llamada a OpenAI
+    const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${OPENAI_API_KEY}`,
@@ -119,29 +112,30 @@ app.post("/api/chat", async (req, res) => {
       }),
     });
 
-    const data = await response.json();
+    const data = await openaiRes.json();
 
     if (data.error) {
       console.error("OpenAI error:", data.error);
       return res.status(500).json({ error: data.error.message || "AI error" });
     }
 
-    const aiMessage = data.choices?.[0]?.message?.content ?? "(sin respuesta)";
-    const payload = { reply: aiMessage };
+    let aiMessage = data.choices?.[0]?.message?.content ?? "(sin respuesta)";
 
-    // si pidió rutina, la mandamos también
-    if (askedRoutine) {
-      payload.routine = buildRoutine(userData);
-    }
+    // ⬇️ 3) Forzamos a que la respuesta incluya lo que nos mandó el front
+    const prefix = `Datos que tengo tuyos: objetivo=${userData.goal || "no indicado"}, días=${userData.trainingDays || "no indicado"}, altura=${userData.height || "no indicada"}, peso=${userData.weight || "no indicado"}.\n\n`;
+    aiMessage = prefix + aiMessage;
 
-    return res.json(payload);
+    return res.json({
+      reply: aiMessage,
+      ...(askedRoutine ? { routine: buildRoutine(userData) } : {})
+    });
+
   } catch (err) {
     console.error("Error talking to AI:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// Start
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
