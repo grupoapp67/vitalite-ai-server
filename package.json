@@ -1,17 +1,14 @@
 {
-  "name": "vitaliteplus-ai",
+  "name": "vitalite-ai-server",
   "version": "1.0.0",
-  "description": "API sencilla para la app de CodePen",
   "main": "server.js",
-  "type": "module",
+  "license": "MIT",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "node-fetch": "^3.3.2"
+    "express": "^4.19.2"
   },
   "engines": {
     "node": ">=18"
