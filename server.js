@@ -1,157 +1,147 @@
 // server.js
 const express = require("express");
 const cors = require("cors");
-
 const app = express();
+
+// si Render te da PORT:
 const PORT = process.env.PORT || 3000;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || ""; // por si luego quieres usar IA real
 
 app.use(cors());
 app.use(express.json());
 
-// --------------------
-// 1. utilidades de rutina
-// --------------------
-function shuffle(arr) {
-  return arr
-    .map((x) => ({ x, r: Math.random() }))
-    .sort((a, b) => a.r - b.r)
-    .map((o) => o.x);
-}
+// util para construir una rutina decente
+function buildRoutineFromUser(user) {
+  // user puede venir mezclado: encuestas + chatProfile
+  const goal = user.goal || "mantener";
+  const trainingDays = Number(user.trainingDays || 3);
 
-function buildFunctionalRoutine(userData = {}) {
-  const goal = (userData.goal || "mantener").toLowerCase();
-  const trainingDays = Number(userData.trainingDays || 3);
-  const daysNames = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
+  // lista de días
+  const days = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
 
-  // bancos de ejercicios
-  const strengthUpper = [
-    "Press banca 4x8-10",
-    "Remo con mancuernas 4x10",
-    "Press militar 3x10",
-    "Curl bíceps 3x12",
-    "Fondos en banca 3x12",
-    "Aperturas con mancuernas 3x12"
-  ];
-  const strengthLower = [
-    "Sentadillas 4x10",
-    "Peso muerto rumano 4x10",
-    "Zancadas caminando 3x12 c/p",
-    "Puente de glúteo 3x15",
-    "Elevación de gemelos 3x15"
-  ];
-  const coreMobility = [
-    "Plancha 3x30s",
-    "Plancha lateral 3x20s c/lado",
-    "Bird-dog 3x12",
-    "Dead bug 3x12",
-    "Estiramientos 10 min"
-  ];
-  const cardioFatLoss = [
-    "Cardio moderado 25-30 min",
-    "HIIT 15-20 min (30s ON / 30s OFF)",
-    "Caminata rápida 35 min",
-    "Elíptica 25 min"
-  ];
+  // bloques según objetivo (un poco más reales)
+  const blocks = {
+    bajar: [
+      "Calentamiento 5-10 min",
+      "Cardio moderado 25 min",
+      "Core: plancha 3x30s",
+      "Estiramientos 5 min"
+    ],
+    masa: [
+      "Calentamiento 5-10 min",
+      "Pecho/Espalda: 3 ejercicios 3x10-12",
+      "Piernas/Glúteos: sentadilla o zancadas 3x10",
+      "Core 3x15",
+    ],
+    mantener: [
+      "Calentamiento 5-10 min",
+      "Full body 20-25 min (sentadilla, flexión, remo)",
+      "Cardio suave 10 min",
+      "Movilidad 5 min"
+    ],
+    resistencia: [
+      "Calentamiento 5-10 min",
+      "HIIT 15-20 min (30s on / 30s off)",
+      "Core 3x30s",
+      "Estiramientos 5-8 min"
+    ]
+  };
 
-  let routinePerDay = [];
+  let base = blocks[goal] || blocks["mantener"];
 
-  if (goal === "masa") {
-    // típico: push / pull / legs / full
-    const templates = [
-      ["Pecho y hombro", ...shuffle(strengthUpper).slice(0, 3), "Core ligero 5 min"],
-      ["Espalda y brazos", ...shuffle(strengthUpper).slice(0, 3), "Core ligero 5 min"],
-      ["Piernas", ...shuffle(strengthLower).slice(0, 4)],
-      ["Full body", ...shuffle(strengthUpper).slice(0, 2), ...shuffle(strengthLower).slice(0, 2)]
-    ];
-    for (let i = 0; i < 7; i++) {
-      if (i < trainingDays) {
-        const t = templates[i % templates.length];
-        routinePerDay.push({
-          day: daysNames[i],
-          routine: t.join(", ")
-        });
-      } else {
-        routinePerDay.push({ day: daysNames[i], routine: "Descanso 💤" });
-      }
-    }
-  } else if (goal === "bajar") {
-    // alternar cardio + fuerza ligera
-    for (let i = 0; i < 7; i++) {
-      if (i < trainingDays) {
-        if (i % 2 === 0) {
-          routinePerDay.push({
-            day: daysNames[i],
-            routine: shuffle(cardioFatLoss)[0] + ", core 10 min"
-          });
-        } else {
-          routinePerDay.push({
-            day: daysNames[i],
-            routine: "Fuerza total cuerpo: " + shuffle(strengthUpper).slice(0, 2).concat(shuffle(strengthLower).slice(0, 1)).join(", ")
-          });
-        }
-      } else {
-        routinePerDay.push({ day: daysNames[i], routine: "Descanso 💤" });
-      }
-    }
-  } else if (goal === "resistencia") {
-    for (let i = 0; i < 7; i++) {
-      if (i < trainingDays) {
-        routinePerDay.push({
-          day: daysNames[i],
-          routine: shuffle(cardioFatLoss)[0] + ", " + shuffle(coreMobility)[0]
-        });
-      } else {
-        routinePerDay.push({ day: daysNames[i], routine: "Descanso 💤" });
-      }
-    }
-  } else {
-    // mantener
-    for (let i = 0; i < 7; i++) {
-      if (i < trainingDays) {
-        routinePerDay.push({
-          day: daysNames[i],
-          routine: [
-            ...shuffle(strengthUpper).slice(0, 1),
-            ...shuffle(strengthLower).slice(0, 1),
-            ...shuffle(coreMobility).slice(0, 1)
-          ].join(", ")
-        });
-      } else {
-        routinePerDay.push({ day: daysNames[i], routine: "Descanso 💤" });
-      }
-    }
+  // si viene estresado del front, añadimos algo suave
+  if (user.stress && /frecuent|siempre/i.test(user.stress)) {
+    base = base.concat(["Respiración 5 min"]);
   }
 
-  return routinePerDay;
+  // armamos el horario: los primeros N días tienen rutina, el resto descanso
+  const schedule = days.map((day, i) => {
+    if (i < trainingDays) {
+      return {
+        day,
+        routine: base.join(", "),
+        completed: false,
+      };
+    } else {
+      return {
+        day,
+        routine: "Descanso activo (caminar 15-20 min, estirar)",
+        completed: false,
+      };
+    }
+  });
+
+  return schedule;
 }
 
-// --------------------
-// 2. rutas
-// --------------------
-app.get("/", (req, res) => {
-  res.json({ ok: true });
-});
+// ====================================================
+// ENDPOINT PRINCIPAL DEL CHAT
+// tu front le pega a: https://vitalite-ai-server.onrender.com/api/chat
+// ====================================================
+app.post("/api/chat", (req, res) => {
+  // lo que manda tu front:
+  const { message, userData = {}, history = [] } = req.body || {};
 
-app.post("/api/chat", async (req, res) => {
-  const { message = "", userData = {}, history = [] } = req.body || {};
-  const lower = message.toLowerCase();
+  // seguridad básica
+  const userMsg = (message || "").toString().trim().toLowerCase();
 
-  // si pide rutina → la generamos nosotros (sin IA) y la mandamos
-  if (lower.includes("rutina") || lower.includes("entrenar") || lower.includes("generar")) {
-    const routine = buildFunctionalRoutine(userData);
+  // si NO hay reply en tu server, el front se queda pegado,
+  // así que SIEMPRE vamos a mandar reply.
+  let reply = "";
+
+  // 1. si el front todavía está “llenando datos” y te dice “bajar”, “masa”, etc,
+  // puedes simplemente reconocerlo
+  if (/bajar/.test(userMsg)) {
+    reply = "Perfecto, objetivo: bajar de peso. ¿Cuántos días quieres entrenar a la semana? (1-7)";
+  } else if (/masa|muscul/.test(userMsg)) {
+    reply = "Va, objetivo: ganar masa 💪. ¿Cuántos días quieres entrenar a la semana? (1-7)";
+  } else if (/mantener/.test(userMsg)) {
+    reply = "Ok, mantenerte en forma. ¿Cuántos días quieres entrenar a la semana? (1-7)";
+  } else if (/resisten/.test(userMsg)) {
+    reply = "Genial, mejorar resistencia. ¿Cuántos días quieres entrenar a la semana? (1-7)";
+  }
+
+  // 2. si el mensaje pide explícitamente rutina
+  if (!reply && /rutina|plan|entrenar|entreno/.test(userMsg)) {
+    const routine = buildRoutineFromUser(userData);
     return res.json({
-      reply: `Listo ${userData.name || ""}, te armé una rutina de ${userData.trainingDays || 3} días usando tu objetivo (${userData.goal || "mantener"}). Si quieres cambiar días u objetivo, dímelo.`,
+      reply: "Te armé una rutina basada en lo que me diste. La verás en la app ✅",
       routine
     });
   }
 
-  // si NO pidió rutina → respondemos corto
+  // 3. si llega algo como “3” (días) pero ya tenemos objetivo, le devolvemos la rutina
+  if (!reply && /^[1-7]$/.test(userMsg) && userData.goal) {
+    const routine = buildRoutineFromUser({
+      ...userData,
+      trainingDays: Number(userMsg)
+    });
+    return res.json({
+      reply: `Perfecto, ${userMsg} días. Te dejo la rutina 👇`,
+      routine
+    });
+  }
+
+  // 4. fallback: si ya tenemos datos suficientes en userData,
+  // no sigas preguntando, simplemente genera rutina
+  if (!reply) {
+    const routine = buildRoutineFromUser(userData);
+    return res.json({
+      reply: "Listo, te dejo una rutina según tus datos 💪",
+      routine
+    });
+  }
+
+  // 5. si llegamos aquí, es porque sí encontramos una respuesta de arriba
   return res.json({
-    reply: "Dime tu objetivo (bajar, masa, mantener, resistencia) y cuántos días vas a entrenar, y te la armo."
+    reply
   });
 });
 
+// endpoint de prueba
+app.get("/", (req, res) => {
+  res.send("Vitalite AI server OK");
+});
+
 app.listen(PORT, () => {
-  console.log("Server running on", PORT);
+  console.log("Server running on port", PORT);
 });
