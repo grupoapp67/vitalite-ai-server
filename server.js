@@ -1,70 +1,99 @@
-// server.js
 const express = require("express");
 const cors = require("cors");
-const app = express();
 
-// si Render te da PORT:
+const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
 app.use(express.json());
 
-// util para construir una rutina decente
-function buildRoutineFromUser(user) {
-  // user puede venir mezclado: encuestas + chatProfile
-  const goal = user.goal || "mantener";
+// ===============================
+// AYUDA: generar rutina variada
+// ===============================
+function buildRoutineFromUser(user = {}) {
+  const daysOfWeek = [
+    "Lunes",
+    "Martes",
+    "Miércoles",
+    "Jueves",
+    "Viernes",
+    "Sábado",
+    "Domingo",
+  ];
+
+  const goal = (user.goal || "mantener").toLowerCase();
   const trainingDays = Number(user.trainingDays || 3);
 
-  // lista de días
-  const days = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
+  // por si viene estrés alto
+  const stressed =
+    typeof user.stress === "string" &&
+    /frecuente|siempre/i.test(user.stress || "");
 
-  // bloques según objetivo (un poco más reales)
-  const blocks = {
-    bajar: [
-      "Calentamiento 5-10 min",
-      "Cardio moderado 25 min",
-      "Core: plancha 3x30s",
-      "Estiramientos 5 min"
-    ],
-    masa: [
-      "Calentamiento 5-10 min",
-      "Pecho/Espalda: 3 ejercicios 3x10-12",
-      "Piernas/Glúteos: sentadilla o zancadas 3x10",
-      "Core 3x15",
-    ],
-    mantener: [
-      "Calentamiento 5-10 min",
-      "Full body 20-25 min (sentadilla, flexión, remo)",
-      "Cardio suave 10 min",
-      "Movilidad 5 min"
-    ],
-    resistencia: [
-      "Calentamiento 5-10 min",
-      "HIIT 15-20 min (30s on / 30s off)",
-      "Core 3x30s",
-      "Estiramientos 5-8 min"
-    ]
-  };
+  function workoutFor(goal, dayIndex) {
+    // según objetivo devolvemos bloques diferentes
+    if (goal === "bajar") {
+      const plans = [
+        "Calentamiento 5-8 min, Cardio moderado 30 min, Core 3x20, Estiramientos 5 min",
+        "HIIT 15-20 min (30s on / 30s off), Sentadillas 3x15, Plancha 3x30s",
+        "Fuerza tren superior (flexiones 4x10, remo 3x12), Caminata 15 min",
+        "Cardio largo 35-40 min (bici o elíptica), Abd 3x20",
+        "Circuito quema grasa 4 vueltas (jumping jacks, zancadas, plancha)",
+      ];
+      const picked = plans[dayIndex % plans.length];
+      return stressed ? picked + ", + 5 min respiración" : picked;
+    }
 
-  let base = blocks[goal] || blocks["mantener"];
+    if (goal === "masa") {
+      // dividimos por grupos musculares
+      const plans = [
+        "Pecho + tríceps: Calentamiento, Flexiones 4x12, Fondos 3x10, Press hombro 3x12, Abd 3x15",
+        "Espalda + bíceps: Dominadas o remo 4x10-12, Curl bíceps 3x12, Peso muerto rumano 3x12",
+        "Pierna + glúteo: Sentadilla 4x10-12, Zancadas 3x12 c/pierna, Puente de glúteo 3x15",
+        "Hombro + core: Press militar 4x10, Elevaciones laterales 3x15, Plancha 3x40s",
+      ];
+      const picked = plans[dayIndex % plans.length];
+      return stressed ? picked + ", + estiramientos 5 min" : picked;
+    }
 
-  // si viene estresado del front, añadimos algo suave
-  if (user.stress && /frecuent|siempre/i.test(user.stress)) {
-    base = base.concat(["Respiración 5 min"]);
+    if (goal === "resistencia") {
+      const plans = [
+        "Calentamiento 8 min, Carrera continua 25-30 min, Estiramientos 5 min",
+        "HIIT carrera 15-20 min, Core 3x30s",
+        "Subidas o cuestas 20 min, Pierna 3x15 (sentadilla, zancada)",
+        "Bici 35 min ritmo medio, Movilidad 5 min",
+      ];
+      const picked = plans[dayIndex % plans.length];
+      return stressed ? picked + ", + respiración 4-5 min" : picked;
+    }
+
+    // mantener
+    const plans = [
+      "Full body 25 min (flexiones 3x12, sentadillas 3x15, remo 3x12), Caminata 10 min",
+      "Cardio suave 20-25 min, Core 3x20, Estiramientos 5 min",
+      "Mix movilidad 15 min + fuerza ligera (bandas) 15 min",
+    ];
+    const picked = plans[dayIndex % plans.length];
+    return stressed ? picked + ", + respiración 5 min" : picked;
   }
 
-  // armamos el horario: los primeros N días tienen rutina, el resto descanso
-  const schedule = days.map((day, i) => {
-    if (i < trainingDays) {
+  // armamos los 7 días
+  const schedule = daysOfWeek.map((day, idx) => {
+    if (idx < trainingDays) {
       return {
         day,
-        routine: base.join(", "),
+        routine: workoutFor(goal, idx),
         completed: false,
       };
     } else {
       return {
         day,
-        routine: "Descanso activo (caminar 15-20 min, estirar)",
+        routine: "Descanso activo: caminar 15-20 min + estirar 5 min",
         completed: false,
       };
     }
@@ -73,75 +102,99 @@ function buildRoutineFromUser(user) {
   return schedule;
 }
 
-// ====================================================
-// ENDPOINT PRINCIPAL DEL CHAT
-// tu front le pega a: https://vitalite-ai-server.onrender.com/api/chat
-// ====================================================
+// ===============================
+// RUTAS
+// ===============================
+app.get("/", (req, res) => {
+  res.send("✅ Vitalite AI server está vivo");
+});
+
 app.post("/api/chat", (req, res) => {
-  // lo que manda tu front:
-  const { message, userData = {}, history = [] } = req.body || {};
+  const { message = "", userData = {}, history = [] } = req.body || {};
 
-  // seguridad básica
-  const userMsg = (message || "").toString().trim().toLowerCase();
+  console.log("📩 mensaje:", message);
+  console.log("🧍 userData:", userData);
 
-  // si NO hay reply en tu server, el front se queda pegado,
-  // así que SIEMPRE vamos a mandar reply.
-  let reply = "";
+  const msg = message.toString().trim().toLowerCase();
 
-  // 1. si el front todavía está “llenando datos” y te dice “bajar”, “masa”, etc,
-  // puedes simplemente reconocerlo
-  if (/bajar/.test(userMsg)) {
-    reply = "Perfecto, objetivo: bajar de peso. ¿Cuántos días quieres entrenar a la semana? (1-7)";
-  } else if (/masa|muscul/.test(userMsg)) {
-    reply = "Va, objetivo: ganar masa 💪. ¿Cuántos días quieres entrenar a la semana? (1-7)";
-  } else if (/mantener/.test(userMsg)) {
-    reply = "Ok, mantenerte en forma. ¿Cuántos días quieres entrenar a la semana? (1-7)";
-  } else if (/resisten/.test(userMsg)) {
-    reply = "Genial, mejorar resistencia. ¿Cuántos días quieres entrenar a la semana? (1-7)";
-  }
-
-  // 2. si el mensaje pide explícitamente rutina
-  if (!reply && /rutina|plan|entrenar|entreno/.test(userMsg)) {
+  // --------------------------
+  // 1) si dice "rutina" → le damos rutina ya
+  // --------------------------
+  if (/rutina|plan|entren/.test(msg)) {
     const routine = buildRoutineFromUser(userData);
     return res.json({
-      reply: "Te armé una rutina basada en lo que me diste. La verás en la app ✅",
-      routine
+      reply: "Listo, te armé una rutina por días 💪. La puedes ver en la sección de 'Tu Rutina'.",
+      routine,
     });
   }
 
-  // 3. si llega algo como “3” (días) pero ya tenemos objetivo, le devolvemos la rutina
-  if (!reply && /^[1-7]$/.test(userMsg) && userData.goal) {
+  // --------------------------
+  // 2) si dice un objetivo → también le damos rutina
+  // --------------------------
+  if (/bajar/.test(msg)) {
+    const routine = buildRoutineFromUser({ ...userData, goal: "bajar" });
+    return res.json({
+      reply: "Objetivo: bajar de peso. Te dejo una rutina variada para varios días 👇",
+      routine,
+    });
+  }
+  if (/masa|múscul|muscul/.test(msg)) {
+    const routine = buildRoutineFromUser({ ...userData, goal: "masa" });
+    return res.json({
+      reply: "Objetivo: ganar masa muscular 💪. Te puse días de pecho, espalda y pierna.",
+      routine,
+    });
+  }
+  if (/mantener/.test(msg)) {
+    const routine = buildRoutineFromUser({ ...userData, goal: "mantener" });
+    return res.json({
+      reply: "Objetivo: mantenerte. Te dejo un plan con full body y cardio suave.",
+      routine,
+    });
+  }
+  if (/resisten/.test(msg)) {
+    const routine = buildRoutineFromUser({ ...userData, goal: "resistencia" });
+    return res.json({
+      reply: "Objetivo: resistencia 🏃. Mezclé carrera, HIIT y movilidad.",
+      routine,
+    });
+  }
+
+  // --------------------------
+  // 3) si respondió solo un número (días) y ya teníamos objetivo
+  // --------------------------
+  if (/^[1-7]$/.test(msg) && userData.goal) {
     const routine = buildRoutineFromUser({
       ...userData,
-      trainingDays: Number(userMsg)
+      trainingDays: Number(msg),
     });
     return res.json({
-      reply: `Perfecto, ${userMsg} días. Te dejo la rutina 👇`,
-      routine
+      reply: `Perfecto, ${msg} días a la semana. Actualicé tu rutina 👌`,
+      routine,
     });
   }
 
-  // 4. fallback: si ya tenemos datos suficientes en userData,
-  // no sigas preguntando, simplemente genera rutina
-  if (!reply) {
+  // --------------------------
+  // 4) si ya teníamos datos en userData pero el mensaje no fue claro
+  // --------------------------
+  if (userData && userData.goal) {
     const routine = buildRoutineFromUser(userData);
     return res.json({
-      reply: "Listo, te dejo una rutina según tus datos 💪",
-      routine
+      reply: "Ya tenía tu objetivo, te vuelvo a mandar tu rutina 💪",
+      routine,
     });
   }
 
-  // 5. si llegamos aquí, es porque sí encontramos una respuesta de arriba
+  // --------------------------
+  // 5) último fallback
+  // --------------------------
   return res.json({
-    reply
+    reply:
+      "Para armarte la rutina dime tu objetivo (bajar, masa, mantener, resistencia) o escribe 'rutina'.",
   });
 });
 
-// endpoint de prueba
-app.get("/", (req, res) => {
-  res.send("Vitalite AI server OK");
-});
-
+// ===============================
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log("✅ Vitalite AI server escuchando en puerto", PORT);
 });
