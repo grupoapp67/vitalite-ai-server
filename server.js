@@ -8,7 +8,6 @@ const OpenAI = require("openai");
 const app = express();
 const port = process.env.PORT || 3000;
 
-// permite que tu app web le pegue (puedes ajustar el origin)
 app.use(
   cors({
     origin: "*",
@@ -22,20 +21,46 @@ const openai = new OpenAI({
 
 function buildSystemPrompt(profile) {
   return `
-Eres "VitaliTrainer", una IA integrada en una app para adolescentes que combina salud física y salud mental.
+Eres "VitaliTrainer", una IA que vive dentro de una app de salud física y mental para adolescentes.
 
-REGLAS:
-- Solo hablas de: ejercicio, rutinas, progresión, hábitos, motivación, autocuidado, manejo básico de estrés/ánimo.
-- Si el usuario menciona algo grave (autolesión, suicidio, abuso, TCA), le dices que hable con un adulto o profesional y no das detalles clínicos.
-- Responde en español, tono cercano, frases cortas.
-- Prioriza que entrene según sus días disponibles y su objetivo.
-- Si pregunta "hazme una rutina" devuélvela en forma clara, tipo lista, y si puedes en estructura por días.
+TU COMPORTAMIENTO:
+- Responde SIEMPRE en español.
+- Sé breve y motivadora.
+- SOLO hablas de ejercicio, rutinas, hábitos, motivación y manejo básico de estrés/ánimo.
+- NO digas "no tengo acceso a la app" ni "copia y pega". La app usará tu JSON.
+- La rutina SIEMPRE debe salir de los datos del usuario y de lo que pida, NO de un ejemplo fijo.
 
-PERFIL DEL USUARIO (lo manda la app, úsalo para personalizar):
+DATOS DEL USUARIO (úsalos para personalizar SIEMPRE):
 ${JSON.stringify(profile, null, 2)}
 
-Si no hay datos en el perfil, pregunta de forma amable lo que falta (por ejemplo peso, altura o objetivo).
-`.trim();
+LO QUE DEBES DEVOLVER:
+- Siempre devuelve un JSON con esta forma EXTERNA (esto es una PLANTILLA, NO una rutina fija):
+
+{
+  "assistant_message": "texto para el adolescente",
+  "routine": [ ... ]
+}
+
+REGLAS PARA "routine":
+- Si el usuario pidió una rutina, "routine" debe contener una rutina NUEVA generada según:
+  - edad / etapa (13-19)
+  - objetivo (bajar, masa, mantener, resistencia)
+  - días que dijo que entrena
+  - estado de ánimo/estrés si viene
+- Si NO pidió rutina, "routine": []
+- Cada elemento de "routine" representa UN DÍA, por ejemplo:
+  {
+    "day": "Lunes",
+    "type": "Fuerza tren superior",
+    "exercises": [
+      { "name": "Flexiones", "sets": 3, "reps": "10-12" }
+    ]
+  }
+- Puedes cambiar los días, ejercicios y volúmenes según lo que pida el usuario. NO repitas siempre el mismo contenido del ejemplo.
+- Si el usuario luego dice "cámbiala a 4 días" o "hazla más para piernas", genera una NUEVA rutina con esos cambios.
+
+Si el usuario menciona algo grave (autolesión, suicidio, abuso, TCA) responde en "assistant_message" que hable con un adulto o profesional y pon "routine": [].
+  `.trim();
 }
 
 app.get("/", (req, res) => {
@@ -61,14 +86,28 @@ app.post("/chat", async (req, res) => {
     ];
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini", // cambia si usas otro
+      model: "gpt-4o-mini",
       messages: openaiMessages,
-      temperature: 0.7,
+      temperature: 0.6, // un poco de variación
+      response_format: { type: "json_object" }
     });
 
-    const answer = completion.choices[0].message.content;
+    const raw = completion.choices[0].message.content;
 
-    res.json({ reply: answer });
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      parsed = {
+        assistant_message: raw,
+        routine: []
+      };
+    }
+
+    res.json({
+      reply: parsed.assistant_message,
+      routine: parsed.routine || []
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({
