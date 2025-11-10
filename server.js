@@ -88,7 +88,7 @@ app.post("/chat", async (req, res) => {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: openaiMessages,
-      temperature: 0.6, // un poco de variación
+      temperature: 0.6,
       response_format: { type: "json_object" }
     });
 
