@@ -8,38 +8,34 @@ const OpenAI = require("openai");
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Config
-app.use(cors());
+// permite que tu app web le pegue (puedes ajustar el origin)
+app.use(
+  cors({
+    origin: "*",
+  })
+);
 app.use(bodyParser.json());
 
-// cliente OpenAI
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY, // en Render la pones en Environment
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
-// helper: arma el system prompt
 function buildSystemPrompt(profile) {
-  // profile viene del front: {name, age, height, weight, goals, mentalNotes, ...}
   return `
-Eres "VitaliTrainer", una IA para una app de adolescentes que quieren mejorar su físico y cuidar su salud mental.
-TU OBJETIVO:
-1. Responder solo sobre: ejercicio, rutinas, progresión, motivación, hábitos saludables, manejo básico de emociones/estrés.
-2. Si la persona menciona algo serio (autolesiones, ideación suicida, abuso, TCA fuerte), debes decir que hable con un adulto/profesional y no dar instrucciones clínicas.
-3. Tus respuestas deben ser cortas, claras y accionables.
-4. Adapta TODO al perfil del usuario de abajo.
+Eres "VitaliTrainer", una IA integrada en una app para adolescentes que combina salud física y salud mental.
 
-PERFIL DEL USUARIO (venía del front):
+REGLAS:
+- Solo hablas de: ejercicio, rutinas, progresión, hábitos, motivación, autocuidado, manejo básico de estrés/ánimo.
+- Si el usuario menciona algo grave (autolesión, suicidio, abuso, TCA), le dices que hable con un adulto o profesional y no das detalles clínicos.
+- Responde en español, tono cercano, frases cortas.
+- Prioriza que entrene según sus días disponibles y su objetivo.
+- Si pregunta "hazme una rutina" devuélvela en forma clara, tipo lista, y si puedes en estructura por días.
+
+PERFIL DEL USUARIO (lo manda la app, úsalo para personalizar):
 ${JSON.stringify(profile, null, 2)}
 
-Cuando pida una rutina, devuelve pasos concretos y, si es posible, en formato estructurado tipo:
-- dia: "Lunes"
-- objetivo: "fuerza"
-- ejercicios: [{nombre, series, reps, descansoSegundos}]
-
-Si el usuario dice que es menor o adolescente, usa tono amigable y motivador.
-
-No hables de política, ni de temas fuera de salud física/mental ligera.
-  `.trim();
+Si no hay datos en el perfil, pregunta de forma amable lo que falta (por ejemplo peso, altura o objetivo).
+`.trim();
 }
 
 app.get("/", (req, res) => {
@@ -56,7 +52,6 @@ app.post("/chat", async (req, res) => {
 
     const systemPrompt = buildSystemPrompt(profile || {});
 
-    // armamos el hilo para OpenAI
     const openaiMessages = [
       { role: "system", content: systemPrompt },
       ...messages.map((m) => ({
@@ -66,16 +61,14 @@ app.post("/chat", async (req, res) => {
     ];
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini", // pon aquí el modelo que tengas en tu cuenta
+      model: "gpt-4o-mini", // cambia si usas otro
       messages: openaiMessages,
       temperature: 0.7,
     });
 
     const answer = completion.choices[0].message.content;
 
-    res.json({
-      reply: answer,
-    });
+    res.json({ reply: answer });
   } catch (err) {
     console.error(err);
     res.status(500).json({
