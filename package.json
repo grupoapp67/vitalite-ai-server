@@ -1,7 +1,7 @@
 {
   "name": "vitalite-ai-server",
   "version": "1.0.0",
-  "description": "Servidor de IA para app de salud física y mental adolescentes",
+  "description": "Servidor IA para VitalitePlus",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
