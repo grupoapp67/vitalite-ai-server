@@ -19,121 +19,73 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-/* ====== helpers de intención ====== */
-
-// devuelve el texto del último mensaje del user
-function getLastUserMessage(messages = []) {
-  const reversed = [...messages].reverse();
-  const lastUser = reversed.find((m) => m.role === "user");
-  return (lastUser && (lastUser.content || "")) || "";
-}
-
-// ¿está hablando de hábitos?
-function mentionsHabits(text = "") {
-  const t = text.toLowerCase();
-  return (
-    t.includes("hábito") ||
-    t.includes("habito") ||
-    t.includes("hábitos") ||
-    t.includes("habitos") ||
-    t.includes("crear hábitos") ||
-    t.includes("crear habitos") ||
-    t.includes("ponerme hábitos") ||
-    t.includes("ponerme habitos")
-  );
-}
-
-// ¿está hablando de rutina/entrenar?
-function mentionsRoutine(text = "") {
-  const t = text.toLowerCase();
-  return (
-    t.includes("rutina") ||
-    t.includes("entreno") ||
-    t.includes("entrenar") ||
-    t.includes("entrenamiento") ||
-    t.includes("cámbiame la rutina") ||
-    t.includes("cambiar la rutina")
-  );
-}
-
-// ¿pide tiempo concreto?
-function detectRequestedDuration(messages = []) {
-  const text = messages
-    .map((m) => (m?.content || "").toLowerCase())
-    .join(" ");
-
-  if (text.includes("1 hora") || text.includes("una hora")) return 60;
-  if (text.includes("60 min") || text.includes("60min")) return 60;
-  if (text.includes("45 min") || text.includes("45min")) return 45;
-  if (text.includes("30 min") || text.includes("30min")) return 30;
-
-  return null;
-}
-
-function buildSystemPrompt(profile, requestedDurationMinutes) {
-  const durationText = requestedDurationMinutes
-    ? `El usuario pidió una duración aproximada de ${requestedDurationMinutes} minutos. ADÁPTATE a ese tiempo y pon "duration": ${requestedDurationMinutes} en cada día.`
-    : `Si el usuario no dijo tiempo, sugiere entre 35 y 40 minutos.`;
-
+/**
+ * Prompt del sistema
+ * - español
+ * - app de adolescentes
+ * - solo temas: entrenamiento, hábitos, motivación, bienestar emocional/coping
+ * - si no hay duración => pedirla y sugerir una
+ * - devolver siempre JSON con assistant_message, routine, habits, metadata
+ */
+function buildSystemPrompt(profile) {
   return `
-Eres "VitaliTrainer", una IA que vive dentro de una app de salud física y mental para adolescentes (13-19).
+Eres "VitaliTrainer", una IA que vive dentro de una app de salud física + mental para ADOLESCENTES (13-19).
 
-OBJETIVO:
-- Solo hablas de: entrenamiento/rutinas, creación de hábitos saludables y acompañamiento emocional amable.
-- Si el usuario cuenta un problema personal, respondes EMPÁTICA, breve y sin juicios (estilo psicólogo joven), y NO inventas rutinas ni hábitos a menos que el último mensaje lo pida.
-- No arrastres pedidos viejos: RESPONDE SOLO a lo que diga el ÚLTIMO mensaje del usuario.
+TONO:
+- Siempre en español.
+- Breve, amable, cero brusca.
+- Puedes responder como mini-psicólogo de apoyo (validar emoción, sugerir algo simple), pero sin hacer diagnósticos.
+- NO respondas sobre temas fuera de: entrenamiento, actividad física, rutinas, hábitos diarios, motivación, manejo básico de estrés/ánimo.
+- Si el usuario cambia de tema (primero hábitos y luego rutina) RESPONDE SOLO a lo último, NO te quedes pegada en lo anterior.
 
-DATOS DEL USUARIO:
-${JSON.stringify(profile, null, 2)}
+DATOS DEL USUARIO (úsalos para adaptar volumen, días, lenguaje):
+${JSON.stringify(profile || {}, null, 2)}
 
-DURACIÓN:
-- ${durationText}
-- Si pidió 60 min: calentamiento 5-10 + bloque principal 35-40 + core/movilidad 10-15.
-
-FORMATO DE RESPUESTA (SIEMPRE JSON):
+TU FORMATO DE RESPUESTA (SIEMPRE JSON):
 {
-  "assistant_message": "texto corto y amable",
+  "assistant_message": "texto para mostrar en el chat",
   "routine": [ ... ],
   "habits": [ ... ],
-  "requested_duration": 40
+  "metadata": {
+    "requested_duration_min": number | null,
+    "recommended_duration_min": number | null
+  }
 }
 
-REGLAS DE CONTENIDO:
-- Si el último mensaje fue sobre RUTINA/entreno: entonces sí devuelve "routine" con los días.
-- Si el último mensaje NO fue sobre RUTINA: devuelve "routine": [].
-- Si el último mensaje fue sobre HÁBITOS: entonces sí devuelve "habits".
-- Si el último mensaje NO fue sobre HÁBITOS: devuelve "habits": [].
-- En fuerza usa SIEMPRE reps fijas: "reps": 10 (NO "10-12").
-- Cada ejercicio debe tener o "sets"+"reps" o "time".
-- Si el mensaje es solo emocional ("me siento mal", "estoy triste", etc.), responde con apoyo y pon routine: [] y habits: [].
+REGLAS DE DURACIÓN:
+- Si el usuario NO dijo cuánto tiempo quiere entrenar, en "assistant_message" PREGUNTA algo como: "¿cuánto tiempo quieres entrenar hoy? 20, 30 o 45 min?".
+- En "metadata.recommended_duration_min" pon un número recomendado (por ejemplo 30).
+- Si el usuario SÍ dijo "1 hora" o "60 minutos", entonces "requested_duration_min": 60 y "recommended_duration_min": 60.
+- Usa la duración para ajustar el número de ejercicios.
 
-EJEMPLO DE RUTINA (no lo copies literal, es solo forma):
-"routine": [
+REGLAS PARA "routine":
+- Si el usuario pidió una rutina (por ejemplo "hazme una rutina de pierna 3 días"), entonces "routine" debe traer esos días con ejercicios detallados.
+- Cada elemento de la rutina es UN día:
   {
     "day": "Lunes",
-    "type": "Fuerza tren superior",
-    "duration": 40,
+    "type": "Pierna y glúteo",
     "exercises": [
-      { "name": "Calentamiento articular", "time": "5 min" },
-      { "name": "Flexiones", "sets": 3, "reps": 12 },
-      { "name": "Remo con mochila", "sets": 3, "reps": 12 },
-      { "name": "Plancha", "time": "3 x 30s" },
-      { "name": "Estiramientos", "time": "5 min" }
+      { "name": "Sentadillas", "sets": 4, "reps": "10-12" },
+      { "name": "Zancadas alternadas", "sets": 3, "reps": "12/12" },
+      { "name": "Puente de glúteo", "sets": 3, "reps": "15" }
     ]
   }
-]
+- Si NO pidió rutina, "routine": [].
 
-EJEMPLO DE HÁBITOS:
-"habits": [
-  { "title": "Tomar agua al despertar", "desc": "1 vaso apenas te levantas" },
-  { "title": "Respirar 1 min", "desc": "Para bajar ansiedad" }
-]
+REGLAS PARA "habits":
+- Si el usuario pide hábitos ("créame hábitos", "hábitos para estudiar", "hábitos de sueño"), devuelve un array así:
+  "habits": [
+    { "title": "Tomar agua al despertar", "desc": "Activas tu cuerpo." },
+    { "title": "Respirar 1 min", "desc": "Baja estrés rápido." }
+  ]
+- Si NO pidió hábitos, "habits": [].
 
-RIESGO:
-- Si habla de autolesión, suicidio, abuso o algo grave: "assistant_message" = recomendar adulto/profesional y "routine": [] y "habits": [].
-  `.trim();
+SEGURIDAD:
+- Si menciona algo grave (autolesión, suicidio, abuso, TCA) responde en "assistant_message" que hable con un adulto o profesional y pon "routine": [] y "habits": [].
+`.trim();
 }
 
+// raíz
 app.get("/", (req, res) => {
   res.json({ ok: true, message: "Vitali AI server running" });
 });
@@ -146,13 +98,7 @@ app.post("/chat", async (req, res) => {
       return res.status(400).json({ error: "messages debe ser un array" });
     }
 
-    // intención del ÚLTIMO mensaje
-    const lastUserText = getLastUserMessage(messages);
-    const userWantsHabits = mentionsHabits(lastUserText);
-    const userWantsRoutine = mentionsRoutine(lastUserText);
-    const requestedDurationMinutes = detectRequestedDuration(messages);
-
-    const systemPrompt = buildSystemPrompt(profile || {}, requestedDurationMinutes);
+    const systemPrompt = buildSystemPrompt(profile || {});
 
     const openaiMessages = [
       { role: "system", content: systemPrompt },
@@ -175,63 +121,114 @@ app.post("/chat", async (req, res) => {
     try {
       parsed = JSON.parse(raw);
     } catch (e) {
+      // si vino texto suelto, lo encapsulamos
       parsed = {
         assistant_message: raw,
         routine: [],
         habits: [],
+        metadata: {
+          requested_duration_min: null,
+          recommended_duration_min: 30,
+        },
       };
     }
 
-    // normalizamos lo que vino
-    let finalRoutine = Array.isArray(parsed.routine) ? parsed.routine : [];
-    let finalHabits = Array.isArray(parsed.habits) ? parsed.habits : [];
+    // --------- NORMALIZACIÓN ---------
+    const userMsg = messages[messages.length - 1]?.content?.toLowerCase() || "";
+    const userWantsRoutine =
+      Array.isArray(parsed.routine) && parsed.routine.length > 0 ||
+      userMsg.includes("rutina") ||
+      userMsg.includes("entreno") ||
+      userMsg.includes("pierna") ||
+      userMsg.includes("pecho") ||
+      userMsg.includes("espalda");
 
-    // SI el usuario NO habló de rutina en el último mensaje → no mandamos rutina
-    if (!userWantsRoutine) {
-      finalRoutine = [];
-    }
+    const userWantsHabits =
+      Array.isArray(parsed.habits) && parsed.habits.length > 0 ||
+      userMsg.includes("hábito") ||
+      userMsg.includes("habitos") ||
+      userMsg.includes("hábitos");
 
-    // SI el usuario NO habló de hábitos en el último mensaje → no mandamos hábitos
-    if (!userWantsHabits) {
-      finalHabits = [];
-    }
+    // rutina original de la IA
+    const aiRoutine = Array.isArray(parsed.routine) ? parsed.routine : [];
 
-    // duración de respaldo
-    const fallbackDuration =
-      parsed.requested_duration || requestedDurationMinutes || 40;
-
-    const normalizedRoutine = finalRoutine.map((dayObj) => {
-      const dayCopy = { ...dayObj };
-      if (!dayCopy.duration) {
-        dayCopy.duration = fallbackDuration;
-      }
-      if (!Array.isArray(dayCopy.exercises)) {
-        dayCopy.exercises = [];
-      }
-      // forzamos reps fijas si viene algo raro
-      dayCopy.exercises = dayCopy.exercises.map((ex) => {
-        const exCopy = { ...ex };
-        if (typeof exCopy.reps === "string" && exCopy.reps.includes("-")) {
-          // si viene "10-12" nos quedamos con el primer número
-          const first = parseInt(exCopy.reps.split("-")[0], 10);
-          if (!isNaN(first)) exCopy.reps = first;
+    // normalizar ejercicios
+    const normalizedRoutine = aiRoutine.map((dayObj, idx) => {
+      const fallbackDays = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
+      const safeDay = dayObj.day || fallbackDays[idx] || "Día";
+      const safeType = dayObj.type || "Entrenamiento";
+      const exs = Array.isArray(dayObj.exercises) ? dayObj.exercises : [];
+      const normalizedExs = exs.map((ex) => {
+        if (typeof ex === "string") {
+          return { name: ex };
         }
-        return exCopy;
+        return {
+          name: ex.name || "Ejercicio",
+          sets: ex.sets || ex.series || null,
+          reps: ex.reps || ex.repetitions || null,
+          time: ex.time || null,
+        };
       });
-      return dayCopy;
+      return {
+        day: safeDay,
+        type: safeType,
+        duration: dayObj.duration || parsed?.metadata?.requested_duration_min || parsed?.metadata?.recommended_duration_min || null,
+        exercises: normalizedExs,
+      };
     });
 
+    // --------- COMPLETAR SEMANA ---------
+    const WEEK_DAYS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
+
+    // si la IA no puso day en alguno, ya pusimos uno arriba por índice
+    const routineByDay = {};
+    normalizedRoutine.forEach((d) => {
+      if (d.day) routineByDay[d.day] = d;
+    });
+
+    // armamos los 7 días
+    const fullWeekRoutine = WEEK_DAYS.map((dayName) => {
+      if (routineByDay[dayName]) {
+        return routineByDay[dayName];
+      }
+      // día que la IA NO mandó -> lo completamos como descanso activo
+      return {
+        day: dayName,
+        type: "Descanso activo",
+        duration: 15,
+        exercises: [
+          { name: "Caminar 10 min", time: "10 min" },
+          { name: "Estiramientos suaves", time: "5 min" },
+        ],
+      };
+    });
+
+    // --------- HÁBITOS ---------
+    const habitsArray = Array.isArray(parsed.habits) ? parsed.habits : [];
+    // los normalizamos un poco
+    const normalizedHabits = habitsArray.map((h) => ({
+      title: h.title || h.name || "Hábito",
+      desc: h.desc || h.description || "",
+    }));
+
+    // --------- METADATA ---------
+    const meta = parsed.metadata || {};
+    const requestedDuration = typeof meta.requested_duration_min === "number" ? meta.requested_duration_min : null;
+    const recommendedDuration =
+      typeof meta.recommended_duration_min === "number"
+        ? meta.recommended_duration_min
+        : 30; // por defecto recomendamos 30
+
+    // respuesta final al front
     res.json({
-      reply:
-        parsed.assistant_message ||
-        (userWantsRoutine
-          ? "Aquí tienes una rutina adaptada 💪"
-          : userWantsHabits
-          ? "Te dejo unos hábitos fáciles 😉"
-          : "Te leo 💛"),
-      routine: normalizedRoutine,
-      habits: finalHabits,
-      requested_duration: fallbackDuration,
+      reply: parsed.assistant_message || "Listo 👍",
+      // solo mandamos rutina si realmente la pidió o la IA la generó
+      routine: userWantsRoutine ? fullWeekRoutine : [],
+      habits: userWantsHabits ? normalizedHabits : [],
+      metadata: {
+        requested_duration_min: requestedDuration,
+        recommended_duration_min: recommendedDuration,
+      },
     });
   } catch (err) {
     console.error(err);
