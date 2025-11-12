@@ -19,13 +19,12 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// detecta si en los mensajes el usuario dijo "1 hora", "60 min", etc.
+// detecta si en el chat el usuario dijo "1 hora", "60 min", etc.
 function detectRequestedDuration(messages = []) {
   const text = messages
     .map((m) => (m?.content || "").toLowerCase())
     .join(" ");
 
-  // casos típicos
   if (text.includes("1 hora") || text.includes("una hora")) return 60;
   if (text.includes("60 min") || text.includes("60min")) return 60;
   if (text.includes("45 min") || text.includes("45min")) return 45;
@@ -35,7 +34,6 @@ function detectRequestedDuration(messages = []) {
 }
 
 function buildSystemPrompt(profile, requestedDurationMinutes) {
-  // si el usuario no pidió tiempo, sugerimos 35-40
   const durationText = requestedDurationMinutes
     ? `El usuario pidió una duración aproximada de ${requestedDurationMinutes} minutos. ADÁPTATE a ese tiempo.`
     : `Si el usuario no dijo tiempo, sugiere entre 35 y 40 minutos.`;
@@ -45,23 +43,19 @@ Eres "VitaliTrainer", una IA que vive dentro de una app de salud física y menta
 
 TU TONO:
 - Siempre en español.
-- Corto, motivador, sin tecnicismos largos.
-- No digas que no tienes acceso, la app va a usar tu JSON.
+- Corto, motivador.
+- No digas que no tienes acceso, la app usa tu JSON.
 
-DATOS DEL USUARIO (úsalos siempre):
+DATOS DEL USUARIO:
 ${JSON.stringify(profile, null, 2)}
-
-OBJETIVO GENERAL:
-- Generar rutinas y hábitos adecuados al objetivo del usuario (bajar, masa, mantener, resistencia), a los días que entrena y a su estado de ánimo/estrés.
-- Si el usuario tiene estrés alto, mezcla respiración/movilidad.
 
 SOBRE EL TIEMPO:
 - ${durationText}
-- Si el usuario pidió 60 minutos, crea bloques para que se vea como "1h": calentamiento (5-10), bloque principal (35-40), core/movilidad (10-15).
+- Si el usuario pidió 60 minutos, arma el día como: calentamiento (5-10) + bloque principal (35-40) + core/movilidad (10-15).
 
 FORMATO DE RESPUESTA (SIEMPRE JSON):
 {
-  "assistant_message": "texto corto para mostrar en el chat",
+  "assistant_message": "texto corto para el chat",
   "routine": [
     {
       "day": "Lunes",
@@ -69,8 +63,8 @@ FORMATO DE RESPUESTA (SIEMPRE JSON):
       "duration": 60,
       "exercises": [
         { "name": "Calentamiento articular", "time": "5 min" },
-        { "name": "Flexiones", "sets": 3, "reps": "10-12" },
-        { "name": "Remo mochila", "sets": 3, "reps": "12" },
+        { "name": "Flexiones", "sets": 3, "reps": 12 },
+        { "name": "Remo con mochila", "sets": 3, "reps": 12 },
         { "name": "Plancha", "time": "3 x 30s" },
         { "name": "Estiramientos", "time": "5 min" }
       ]
@@ -83,22 +77,20 @@ FORMATO DE RESPUESTA (SIEMPRE JSON):
 }
 
 REGLAS PARA "routine":
-- Si el usuario pidió una rutina nueva o dijo que la cambies, DEVUELVE una rutina en el array.
-- Cada elemento del array es UN DÍA (no más de 7).
-- Los días deben ser coherentes para una semana.
-- Si el usuario dijo que entrena pocos días, prioriza esos días y el resto pon "descanso activo".
-- Cada día debe tener 4 a 7 ejercicios/bloques, no 1 solo.
+- Si el usuario pidió una rutina nueva o un cambio, DEVUELVE una rutina en el array.
+- Cada elemento del array es UN DÍA (máx 7).
+- Adáptala al objetivo: bajar, masa, mantener, resistencia.
 - Incluye calentamiento y algo de core/movilidad cuando tenga sentido.
-- Si el usuario pidió 1 hora, reparte el tiempo, pero no pongas textos larguísimos.
+- **Muy importante**: en los ejercicios de fuerza usa **repeticiones fijas**, por ejemplo "reps": 10 o "reps": 12. **NO uses rangos como "10-12" o "8-10"** porque la app solo muestra un número.
+- Los días de descanso activo ponlos con ejercicios suaves (caminar 10 min, estirar 5 min).
 
 REGLAS PARA "habits":
-- Si el usuario pidió hábitos (o si su objetivo lo sugiere, como bajar de peso o dormir mejor), agrega algunos hábitos.
-- Cada hábito debe tener "title" y opcionalmente "desc".
-- No hagas preguntas en los hábitos, solo mándalos (la app los va a insertar).
-- Ejemplos de hábitos: "Respirar 1 min", "Tomar agua", "Dormir a la misma hora", "Ordenar el cuarto 5 min".
+- Si el usuario pidió hábitos o se ve que le serviría, mándalos aquí.
+- Formato: { "title": "...", "desc": "..." }
+- No hagas preguntas en los hábitos (“¿qué hábito quieres?”), solo mándalos; la app los inserta.
 
-SI HAY CONTENIDO DE RIESGO:
-- Si habla de autolesión, suicidio, abuso o algo grave: "assistant_message" debe decir que hable con un adulto/profesional y "routine": [] y "habits": [].
+CONTENIDO DE RIESGO:
+- Si habla de autolesión, suicidio, abuso, etc: "assistant_message" recomienda hablar con un adulto/profesional y "routine": [] y "habits": [].
   `.trim();
 }
 
@@ -114,7 +106,6 @@ app.post("/chat", async (req, res) => {
       return res.status(400).json({ error: "messages debe ser un array" });
     }
 
-    // detectamos si el usuario pidió una duración concreta
     const requestedDurationMinutes = detectRequestedDuration(messages);
     const systemPrompt = buildSystemPrompt(profile || {}, requestedDurationMinutes);
 
@@ -139,7 +130,6 @@ app.post("/chat", async (req, res) => {
     try {
       parsed = JSON.parse(raw);
     } catch (e) {
-      // si por alguna razón el modelo no devolvió JSON
       parsed = {
         assistant_message: raw,
         routine: [],
@@ -147,7 +137,6 @@ app.post("/chat", async (req, res) => {
       };
     }
 
-    // normalizamos la rutina y le metemos duración si falta
     const finalRoutine = Array.isArray(parsed.routine) ? parsed.routine : [];
     const finalHabits = Array.isArray(parsed.habits) ? parsed.habits : [];
 
@@ -158,7 +147,6 @@ app.post("/chat", async (req, res) => {
       if (!dayCopy.duration) {
         dayCopy.duration = fallbackDuration;
       }
-      // nos aseguramos de que exercises sea array
       if (!Array.isArray(dayCopy.exercises)) {
         dayCopy.exercises = [];
       }
